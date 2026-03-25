@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-bench Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --llm-bench-bg: #0d1117;
+  --llm-bench-surface: #161b22;
+  --llm-bench-border: #30363d;
+  --llm-bench-text: #e6edf3;
+  --llm-bench-muted: #8b949e;
+  --llm-bench-green: #3fb950;
+  --llm-bench-red: #f85149;
+  --llm-bench-yellow: #d29922;
+  --llm-bench-blue: #58a6ff;
+  --llm-bench-purple: #bc8cff;
+  --llm-bench-orange: #ffa657;
+  --llm-bench-font: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--llm-bench-bg);
+  color: var(--llm-bench-text);
+  font-family: var(--llm-bench-font);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 24px;
+}
+h1 { font-size: 18px; margin-bottom: 8px; }
+h2 { font-size: 14px; margin-bottom: 12px; color: var(--llm-bench-muted); font-weight: 400; }
+h3 { font-size: 14px; margin-bottom: 12px; color: var(--llm-bench-text); }
+.card {
+  background: var(--llm-bench-surface);
+  border: 1px solid var(--llm-bench-border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.metric { text-align: center; padding: 12px; }
+.metric-value { font-size: 24px; font-weight: 700; }
+.metric-label { font-size: 11px; color: var(--llm-bench-muted); text-transform: uppercase; margin-top: 4px; }
+.chart-wrap { height: 280px; position: relative; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; padding: 6px 8px; color: var(--llm-bench-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+td { padding: 6px 8px; border-top: 1px solid var(--llm-bench-border); }
+.text-right { text-align: right; }
+.text-center { text-align: center; }
+.badge { display: inline-block; padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+.badge-green { background: rgba(63,185,80,0.15); color: var(--llm-bench-green); }
+.badge-yellow { background: rgba(210,153,34,0.15); color: var(--llm-bench-yellow); }
+.overrides-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 12px; }
+.override-card { display: flex; flex-direction: column; gap: 4px; }
+.override-card label { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--llm-bench-muted); }
+.override-card select {
+  background: var(--llm-bench-bg);
+  border: 1px solid var(--llm-bench-border);
+  border-radius: 6px;
+  color: var(--llm-bench-text);
+  font-family: var(--llm-bench-font);
+  font-size: 12px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+#status { color: var(--llm-bench-muted); font-size: 12px; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+
+<h1>llm-bench</h1>
+<h2>Model Quality vs Cost Benchmarks</h2>
+<div id="status">Loading...</div>
+
+<div class="grid" id="summary-metrics"></div>
+
+<div class="card">
+  <h3>Quality vs Cost</h3>
+  <div class="chart-wrap"><canvas id="scatter-chart"></canvas></div>
+</div>
+
+<div class="card">
+  <h3>Model Selection</h3>
+  <div id="override-controls" class="overrides-grid"></div>
+</div>
+
+<div id="task-tables"></div>
+
+<script>
+const API_BASE = window.LLM_BENCH_API_BASE || '';
+let benchData = null;
+let chartInstance = null;
+
+async function fetchJSON(url) {
+  const r = await fetch(API_BASE + url);
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+async function load() {
+  try {
+    benchData = await fetchJSON('/api/results');
+    document.getElementById('status').textContent =
+      `${benchData.total_runs || 0} benchmark runs across ${Object.keys(benchData.results || {}).length} tasks`;
+    renderMetrics(benchData);
+    renderTables(benchData.results);
+    renderScatter(benchData.results);
+    renderOverrides(benchData);
+  } catch(e) {
+    document.getElementById('status').textContent = 'Error loading benchmarks: ' + e.message;
+    console.error(e);
+  }
+}
+
+function renderMetrics(data) {
+  const el = document.getElementById('summary-metrics');
+  const recs = data.recommendations || {};
+  const nTasks = Object.keys(data.results || {}).length;
+  const nRecs = Object.keys(recs).length;
+  el.innerHTML = `
+    <div class="card metric">
+      <div class="metric-value">${data.total_runs || 0}</div>
+      <div class="metric-label">Total Runs</div>
+    </div>
+    <div class="card metric">
+      <div class="metric-value">${nTasks}</div>
+      <div class="metric-label">Tasks</div>
+    </div>
+    <div class="card metric">
+      <div class="metric-value">${nRecs}</div>
+      <div class="metric-label">Recommendations</div>
+    </div>
+    <div class="card metric">
+      <div class="metric-value">${Object.values(recs).join(', ') || 'N/A'}</div>
+      <div class="metric-label">Best Models</div>
+    </div>
+  `;
+}
+
+function renderTables(resultsByTask) {
+  if (!resultsByTask) return;
+  const container = document.getElementById('task-tables');
+  container.innerHTML = '';
+
+  Object.entries(resultsByTask).forEach(([taskName, rows]) => {
+    const pareto = rows.filter(p =>
+      !rows.some(q => q.quality_mean >= p.quality_mean && q.cost_mean < p.cost_mean && q !== p)
+    );
+    const paretoSet = new Set(pareto.map(p => p.config));
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <h3>${taskName}</h3>
+      <table>
+        <thead><tr>
+          <th>Config</th>
+          <th class="text-right">Avg Cost</th>
+          <th class="text-right">Quality</th>
+          <th class="text-right">Latency</th>
+          <th class="text-right">Runs</th>
+          <th class="text-right">Errors</th>
+          <th class="text-center">Pareto</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => {
+            const subEntries = Object.entries(r.sub_scores || {}).filter(([k]) => k !== 'error');
+            const subHtml = subEntries.length ? `<div style="margin-top:3px;font-size:10px;color:var(--llm-bench-muted);line-height:1.6">${
+              subEntries.map(([k, v]) => `<span style="margin-right:6px">${k.replace(/_/g,' ')}: <span style="color:${v >= 0.7 ? 'var(--llm-bench-green)' : v >= 0.4 ? 'var(--llm-bench-yellow)' : 'var(--llm-bench-red)'}">${(v*100).toFixed(0)}%</span></span>`).join('')
+            }</div>` : '';
+            const qColor = r.quality_mean >= 0.7 ? 'var(--llm-bench-green)' : r.quality_mean >= 0.4 ? 'var(--llm-bench-yellow)' : 'var(--llm-bench-red)';
+            return `<tr>
+              <td style="color:var(--llm-bench-blue)">${r.config}</td>
+              <td class="text-right">$${r.cost_mean < 0.001 ? r.cost_mean.toFixed(6) : r.cost_mean.toFixed(4)}</td>
+              <td>
+                <div class="text-right" style="color:${qColor}">
+                  ${(r.quality_mean * 100).toFixed(0)}%${r.quality_std > 0.05 ? `<span style="font-size:10px;color:var(--llm-bench-muted)"> +/-${(r.quality_std*100).toFixed(0)}</span>` : ''}
+                </div>
+                ${subHtml}
+              </td>
+              <td class="text-right">${r.latency_mean.toFixed(1)}s</td>
+              <td class="text-right">${r.n}</td>
+              <td class="text-right" style="color:${r.errors > 0 ? 'var(--llm-bench-red)' : 'var(--llm-bench-muted)'}">${r.errors}</td>
+              <td class="text-center">${paretoSet.has(r.config) ? '<span class="badge badge-green">P</span>' : ''}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+    container.appendChild(card);
+  });
+}
+
+function renderScatter(resultsByTask) {
+  const ctx = document.getElementById('scatter-chart');
+  if (!ctx) return;
+  if (chartInstance) chartInstance.destroy();
+
+  const byConfig = {};
+  Object.values(resultsByTask || {}).forEach(rows => {
+    rows.forEach(r => {
+      if (!byConfig[r.config]) byConfig[r.config] = { totalCost:0, totalQuality:0, n:0, totalN:0 };
+      byConfig[r.config].totalCost += r.cost_mean;
+      byConfig[r.config].totalQuality += r.quality_mean;
+      byConfig[r.config].n++;
+      byConfig[r.config].totalN += r.n;
+    });
+  });
+
+  const providerColor = name => {
+    if (name.startsWith('gemini-2.5')) return { bg: 'rgba(66,133,244,0.6)', border: '#4285f4' };
+    if (name.startsWith('gemini-3'))   return { bg: 'rgba(52,168,83,0.6)',  border: '#34a853' };
+    if (name.startsWith('haiku'))      return { bg: 'rgba(251,188,4,0.6)',  border: '#fbbc04' };
+    if (name.startsWith('sonnet'))     return { bg: 'rgba(234,67,53,0.6)',  border: '#ea4335' };
+    if (name.includes('gpt'))          return { bg: 'rgba(16,163,127,0.6)', border: '#10a37f' };
+    if (name.includes('qwen'))         return { bg: 'rgba(168,85,247,0.6)', border: '#a855f7' };
+    if (name.includes('llama'))        return { bg: 'rgba(249,115,22,0.6)', border: '#f97316' };
+    if (name.includes('devstral') || name.includes('mistral')) return { bg: 'rgba(236,72,153,0.6)', border: '#ec4899' };
+    return { bg: 'rgba(136,136,136,0.6)', border: '#888' };
+  };
+
+  const datasets = Object.entries(byConfig).map(([config, m]) => {
+    const c = providerColor(config);
+    return {
+      label: config,
+      data: [{ x: m.totalCost/m.n, y: m.totalQuality/m.n, r: Math.max(4, Math.min(Math.sqrt(m.totalN)*2, 20)) }],
+      backgroundColor: c.bg,
+      borderColor: c.border,
+      borderWidth: 1.5,
+    };
+  });
+
+  chartInstance = new Chart(ctx, {
+    type: 'bubble',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'right', labels: { color: 'var(--llm-bench-muted)', boxWidth: 10, font: { size: 10 }, padding: 6 } },
+        tooltip: { callbacks: { label: c => {
+          const p = c.raw;
+          return `${c.dataset.label}: $${p.x.toFixed(4)} / quality ${(p.y*100).toFixed(0)}%`;
+        }}}
+      },
+      scales: {
+        x: { title: { display:true, text:'Avg Cost per Call ($)', color:'#8b949e' }, ticks: { color:'#8b949e', callback: v => '$'+v.toFixed(3) }, grid: { color:'#21262d' } },
+        y: { title: { display:true, text:'Avg Quality (%)', color:'#8b949e' }, ticks: { color:'#8b949e', callback: v => (v*100).toFixed(0)+'%' }, grid: { color:'#21262d' }, max:1.0 },
+      },
+      animation: false,
+    }
+  });
+}
+
+function renderOverrides(data) {
+  const container = document.getElementById('override-controls');
+  if (!container) return;
+  const recs = data.recommendations || {};
+  const overrides = data.overrides || {};
+  const configs = data.available_configs || [];
+  const tasks = Object.keys(data.results || {});
+
+  container.innerHTML = tasks.map(task => {
+    const rec = recs[task];
+    const current = overrides[task] || '';
+    const autoLabel = !current && rec
+      ? `<span style="font-size:10px;color:var(--llm-bench-muted)">using <b>${rec}</b></span>`
+      : !current ? `<span style="font-size:10px;color:var(--llm-bench-muted)">no recommendation</span>`
+      : `<span style="font-size:10px;color:var(--llm-bench-yellow)">manual override</span>`;
+
+    return `<div class="override-card">
+      <label>${task}</label>
+      <select onchange="setOverride('${task}', this.value)">
+        <option value=""${!current ? ' selected' : ''}>Auto</option>
+        ${configs.map(c => `<option value="${c}"${current === c ? ' selected' : ''}>${c}</option>`).join('')}
+      </select>
+      ${autoLabel}
+    </div>`;
+  }).join('');
+}
+
+async function setOverride(task, value) {
+  try {
+    await fetch(API_BASE + '/api/overrides', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({task_name: task, config_name: value || null}),
+    });
+    await load();
+  } catch(e) { console.error(e); }
+}
+
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
