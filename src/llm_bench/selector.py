@@ -35,11 +35,13 @@ class AutoSelector:
         tasks: list[TaskDefinition],
         registry: ModelRegistry | None = None,
         cycle_time_cost: float = 0.002,
+        router: Any = None,
     ) -> None:
         self._storage = storage
         self._tasks = {t.name: t for t in tasks}
         self._registry = registry or ModelRegistry()
         self._cycle_time_cost = cycle_time_cost
+        self._router = router  # optional trained PromptRouter
 
         # Cache: {task_name: config_name}
         self._recommendations: dict[str, str] = {}
@@ -101,6 +103,35 @@ class AutoSelector:
         """
         mc = self.get_best_config(task_name)
         return mc.model if mc else None
+
+    def predict_best_model(
+        self, task_name: str, system_prompt: str, user_prompt: str
+    ) -> tuple[str | None, float]:
+        """Use trained router to predict best model for a specific prompt.
+
+        Falls back to Pareto-based recommendation if router confidence is too low
+        or no router is configured.
+
+        Args:
+            task_name: Task name.
+            system_prompt: System prompt for this call.
+            user_prompt: User prompt for this call.
+
+        Returns:
+            (model_slug, confidence). Confidence is 1.0 for Pareto fallback.
+        """
+        if self._router and self._router.is_trained:
+            config_name, confidence = self._router.predict_with_confidence(
+                system_prompt, user_prompt
+            )
+            if config_name:
+                mc = self._registry.get(config_name)
+                if mc:
+                    return mc.model, confidence
+
+        # Fall back to Pareto recommendation
+        mc = self.get_best_config(task_name)
+        return (mc.model if mc else None), 1.0
 
     @property
     def recommendations(self) -> dict[str, str]:

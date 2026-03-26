@@ -139,6 +139,65 @@ def cmd_dashboard(args: argparse.Namespace) -> None:
     uvicorn.run(app, host=host, port=port)
 
 
+def cmd_train(args: argparse.Namespace) -> None:
+    """Train a router or quality predictor."""
+    from llm_bench.storage import SQLiteStorage
+
+    storage = SQLiteStorage()
+
+    if args.type == "router":
+        from llm_bench.training.router import PromptRouter
+
+        router = PromptRouter()
+        metrics = router.train(storage, task_name=args.task, min_quality=args.min_quality)
+        print(f"Router trained: {metrics}")
+
+        output = args.output or "router.pkl"
+        router.save(output)
+        print(f"Saved to {output}")
+
+    elif args.type == "predictor":
+        from llm_bench.training.predictor import QualityPredictor
+
+        method = args.method or "ridge"
+        predictor = QualityPredictor(method=method)
+        metrics = predictor.train(storage, task_name=args.task)
+        print(f"Predictor trained: {metrics}")
+
+        output = args.output or f"predictor_{method}.pkl"
+        predictor.save(output)
+        print(f"Saved to {output}")
+
+    else:
+        print(f"Unknown training type: {args.type}")
+        sys.exit(1)
+
+
+def cmd_distill(args: argparse.Namespace) -> None:
+    """Prepare fine-tuning data from benchmark results."""
+    from llm_bench.storage import SQLiteStorage
+    from llm_bench.training.distill import prepare_openai, prepare_vertex
+
+    storage = SQLiteStorage()
+    output = args.output or f"finetune_{args.provider}.jsonl"
+
+    if args.provider == "openai":
+        count = prepare_openai(
+            storage, task_name=args.task, output_path=output,
+            min_quality=args.min_quality, source_model=args.source_model,
+        )
+    elif args.provider == "vertex":
+        count = prepare_vertex(
+            storage, task_name=args.task, output_path=output,
+            min_quality=args.min_quality, source_model=args.source_model,
+        )
+    else:
+        print(f"Unknown provider: {args.provider}. Use 'openai' or 'vertex'.")
+        sys.exit(1)
+
+    print(f"Wrote {count} fine-tuning examples to {output}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="llm-bench",
@@ -169,6 +228,24 @@ def main() -> None:
     dash_parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
     dash_parser.add_argument("--port", type=int, default=8765, help="Port to bind to")
     dash_parser.set_defaults(func=cmd_dashboard)
+
+    # train
+    train_parser = subparsers.add_parser("train", help="Train a router or quality predictor")
+    train_parser.add_argument("type", choices=["router", "predictor"], help="What to train")
+    train_parser.add_argument("-t", "--task", help="Task name to train on")
+    train_parser.add_argument("-o", "--output", help="Output path for trained model")
+    train_parser.add_argument("--min-quality", type=float, default=0.3, help="Minimum quality threshold")
+    train_parser.add_argument("--method", choices=["ridge", "distilbert"], default="ridge", help="Predictor method")
+    train_parser.set_defaults(func=cmd_train)
+
+    # distill
+    distill_parser = subparsers.add_parser("distill", help="Prepare fine-tuning data")
+    distill_parser.add_argument("--provider", choices=["openai", "vertex"], default="openai", help="Target provider")
+    distill_parser.add_argument("-t", "--task", required=True, help="Task name")
+    distill_parser.add_argument("-o", "--output", help="Output JSONL path")
+    distill_parser.add_argument("--min-quality", type=float, default=0.7, help="Minimum quality for training data")
+    distill_parser.add_argument("--source-model", help="Only use responses from this model")
+    distill_parser.set_defaults(func=cmd_distill)
 
     args = parser.parse_args()
     if not args.command:

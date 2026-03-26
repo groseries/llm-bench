@@ -47,4 +47,6 @@ __all__ = [
     "SQLiteStorage",
     # Scheduler
     "ContinuousRunner",
+    # Training (lazy imports — only available with pip install llm-bench[train])
+    "training",
 ]

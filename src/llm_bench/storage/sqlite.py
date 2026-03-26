@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
     output_tokens INTEGER DEFAULT 0,
     cost_usd REAL DEFAULT 0.0,
     latency_s REAL DEFAULT 0.0,
+    raw_response TEXT,
     error TEXT,
     source TEXT DEFAULT 'benchmark',
     created_at TEXT NOT NULL
@@ -65,8 +66,8 @@ class SQLiteStorage:
             conn.execute(
                 """INSERT INTO benchmark_results
                    (task_name, config_name, fixture_id, quality_score, sub_scores,
-                    input_tokens, output_tokens, cost_usd, latency_s, error, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    input_tokens, output_tokens, cost_usd, latency_s, raw_response, error, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     result.task_name,
                     result.config_name,
@@ -77,6 +78,7 @@ class SQLiteStorage:
                     result.output_tokens,
                     result.cost_usd,
                     result.latency_s,
+                    result.raw_response or None,
                     result.error,
                     result.timestamp,
                 ),
@@ -87,8 +89,8 @@ class SQLiteStorage:
             conn.executemany(
                 """INSERT INTO benchmark_results
                    (task_name, config_name, fixture_id, quality_score, sub_scores,
-                    input_tokens, output_tokens, cost_usd, latency_s, error, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    input_tokens, output_tokens, cost_usd, latency_s, raw_response, error, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         r.task_name,
@@ -100,6 +102,7 @@ class SQLiteStorage:
                         r.output_tokens,
                         r.cost_usd,
                         r.latency_s,
+                        r.raw_response or None,
                         r.error,
                         r.timestamp,
                     )
